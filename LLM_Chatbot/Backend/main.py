@@ -207,38 +207,14 @@ OTP_EXPIRE_SECONDS = 600  # 10 minutes
 SECRET_TEST_OTP = "882644"  # Secret OTP for testing; accepts login without email OTP
 
 
-def _send_otp_email(to_email: str, otp: str) -> None:
-    """Send OTP via Gmail SMTP. Professional HTML + plain fallback. Raises on failure."""
-    sender = os.getenv("GMAIL_OTP_EMAIL", "").strip()
-    password = os.getenv("GMAIL_OTP_APP_PASSWORD", "").strip()
-    if not sender or not password:
-        raise ValueError(
-            "OTP email is not configured. Set GMAIL_OTP_EMAIL and GMAIL_OTP_APP_PASSWORD in your environment (e.g. Render Environment Variables)."
-        )
-
-    subject = "OTP From DocuMind"
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = formataddr(("no-reply", sender))
-    msg["To"] = to_email
-
-    # Plain text fallback
-    text = (
-        f"Your One-Time Password from DocuMind\n\n"
-        f"Your one-time password (OTP) is: {otp}\n\n"
-        f"It expires in 10 minutes. Enter this code in the app to sign in.\n\n"
-        f"If you didn't request this, please ignore this email.\n\n"
-        f"DocuMind Team"
-    )
-    msg.attach(MIMEText(text, "plain"))
-
-    # HTML: professional heading, prominent OTP, clean layout
-    html = f"""<!DOCTYPE html>
+def _otp_html_body(otp: str) -> str:
+    """Shared HTML body for OTP email."""
+    return f"""<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{subject}</title>
+  <title>OTP From DocuMind</title>
 </head>
 <body style="margin:0; padding:0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f5f5f5; color: #1a1a1a;">
   <div style="max-width: 560px; margin: 0 auto; padding: 32px 24px;">
@@ -263,6 +239,64 @@ def _send_otp_email(to_email: str, otp: str) -> None:
   </div>
 </body>
 </html>"""
+
+
+def _send_otp_email(to_email: str, otp: str) -> None:
+    """Send OTP email. Prefers Resend (HTTPS, works on Render free tier). Fallback: Gmail SMTP. Raises on failure."""
+    subject = "OTP From DocuMind"
+    html = _otp_html_body(otp)
+
+    # Option 1: Resend API (HTTPS) – works on Render free tier; SMTP ports are blocked there
+    resend_key = os.getenv("RESEND_API_KEY", "").strip()
+    resend_from = os.getenv("RESEND_FROM_EMAIL", "").strip()
+    if resend_key:
+        if not resend_from:
+            raise ValueError(
+                "RESEND_API_KEY is set but RESEND_FROM_EMAIL is missing. "
+                "Set RESEND_FROM_EMAIL to a verified sender (e.g. DocuMind <noreply@yourdomain.com>). See https://resend.com/domains"
+            )
+        import httpx
+        r = httpx.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {resend_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "from": resend_from,
+                "to": [to_email],
+                "subject": subject,
+                "html": html,
+            },
+            timeout=15.0,
+        )
+        if r.status_code != 200:
+            err = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+            msg = err.get("message", err.get("detail", r.text)) or f"HTTP {r.status_code}"
+            raise RuntimeError(f"Resend API error: {msg}")
+        return
+
+    # Option 2: Gmail SMTP (blocked on Render free tier – use Resend there)
+    sender = os.getenv("GMAIL_OTP_EMAIL", "").strip()
+    password = os.getenv("GMAIL_OTP_APP_PASSWORD", "").strip()
+    if not sender or not password:
+        raise ValueError(
+            "OTP email is not configured. On Render free tier, SMTP is blocked – set RESEND_API_KEY and RESEND_FROM_EMAIL. "
+            "Otherwise set GMAIL_OTP_EMAIL and GMAIL_OTP_APP_PASSWORD. See RENDER.md."
+        )
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = formataddr(("no-reply", sender))
+    msg["To"] = to_email
+    text = (
+        f"Your One-Time Password from DocuMind\n\n"
+        f"Your one-time password (OTP) is: {otp}\n\n"
+        f"It expires in 10 minutes. Enter this code in the app to sign in.\n\n"
+        f"If you didn't request this, please ignore this email.\n\n"
+        f"DocuMind Team"
+    )
+    msg.attach(MIMEText(text, "plain"))
     msg.attach(MIMEText(html, "html"))
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:

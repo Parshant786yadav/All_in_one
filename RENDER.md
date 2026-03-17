@@ -11,14 +11,20 @@ Render sets `$PORT`; the app must listen on that port.
 ## DocuMind (LLM Chatbot): OTP and Google login
 
 ### OTP (email) login
-For "Send OTP" to work, set these **Environment Variables** in Render (Dashboard → your service → Environment):
+**On Render free tier, SMTP is blocked** (Gmail SMTP gives "Network is unreachable"). Use **Resend** (HTTPS API) instead.
+
+1. Sign up at [resend.com](https://resend.com) and get an API key.
+2. Add and verify a domain in Resend (or use their test sender for development).
+3. In Render → Environment, set:
 
 | Key | Value |
 |-----|--------|
-| `GMAIL_OTP_EMAIL` | Your Gmail address (e.g. `you@gmail.com`) |
-| `GMAIL_OTP_APP_PASSWORD` | A [Gmail App Password](https://support.google.com/accounts/answer/185833) (not your normal password) |
+| `RESEND_API_KEY` | Your Resend API key (e.g. `re_...`) |
+| `RESEND_FROM_EMAIL` | Verified sender, e.g. `DocuMind <noreply@yourdomain.com>` |
 
-If these are missing, the app will return a clear error asking you to set them.
+After redeploy, OTP will be sent via Resend and will work on the free tier.
+
+**If you're on a paid Render plan** (or running locally), you can use Gmail instead: set `GMAIL_OTP_EMAIL` and `GMAIL_OTP_APP_PASSWORD` (no Resend needed).
 
 ### Continue with Google
 1. **Environment variables** in Render:
