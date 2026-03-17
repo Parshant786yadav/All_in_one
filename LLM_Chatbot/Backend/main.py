@@ -122,6 +122,24 @@ def startup():
     _ensure_storage_bucket()
 
 
+# Trust proxy headers (Render, etc.) so request.base_url is https://your-app.onrender.com
+class ProxyHeadersMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            headers = dict((k.decode().lower(), v.decode()) for k, v in scope.get("headers", []))
+            proto = headers.get("x-forwarded-proto", "").strip().split(",")[0].strip()
+            host = headers.get("x-forwarded-host", "").strip().split(",")[0].strip()
+            if proto in ("http", "https"):
+                scope["scheme"] = proto
+            if host:
+                scope["server"] = (host, None)
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(ProxyHeadersMiddleware)
 app.add_middleware(
     SessionMiddleware,
     secret_key=os.getenv("SESSION_SECRET_KEY", "change-me-in-production-use-env"),
@@ -194,7 +212,9 @@ def _send_otp_email(to_email: str, otp: str) -> None:
     sender = os.getenv("GMAIL_OTP_EMAIL", "").strip()
     password = os.getenv("GMAIL_OTP_APP_PASSWORD", "").strip()
     if not sender or not password:
-        raise ValueError("GMAIL_OTP_EMAIL and GMAIL_OTP_APP_PASSWORD must be set in .env")
+        raise ValueError(
+            "OTP email is not configured. Set GMAIL_OTP_EMAIL and GMAIL_OTP_APP_PASSWORD in your environment (e.g. Render Environment Variables)."
+        )
 
     subject = "OTP From DocuMind"
     msg = MIMEMultipart("alternative")
@@ -260,7 +280,7 @@ def _otp_cleanup_expired():
 
 @app.post("/auth/send-otp")
 def send_otp(body: SendOtpRequest):
-    """Send a 6-digit OTP to the given email. Uses Gmail SMTP (set GMAIL_OTP_EMAIL and GMAIL_OTP_APP_PASSWORD in .env)."""
+    """Send a 6-digit OTP to the given email. Uses Gmail SMTP (set GMAIL_OTP_EMAIL and GMAIL_OTP_APP_PASSWORD in .env or Render env)."""
     email = (body.email or "").strip().lower()
     if not email or "@" not in email:
         raise HTTPException(status_code=400, detail="Valid email required")
@@ -269,6 +289,10 @@ def send_otp(body: SendOtpRequest):
     _otp_store[email] = {"otp": otp, "expires_at": time.time() + OTP_EXPIRE_SECONDS}
     try:
         _send_otp_email(email, otp)
+    except ValueError as e:
+        if email in _otp_store:
+            del _otp_store[email]
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         if email in _otp_store:
             del _otp_store[email]
